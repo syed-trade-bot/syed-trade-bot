@@ -1,0 +1,24 @@
+# MetaTrader 5 files
+*.ex5
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Neural network weight files (optional - could be included for sharing trained models)
+# NN_Weights_*.txt
+
+# IDE files
+.vscode/
+*.suo
+*.sln
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*~
