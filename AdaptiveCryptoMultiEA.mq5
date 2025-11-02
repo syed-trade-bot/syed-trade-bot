@@ -504,6 +504,12 @@ bool UpdateIndicatorData()
 //+------------------------------------------------------------------+
 int GetTradingSignal(const double &maFast[], const double &maSlow[], const double &rsi[], string symbol)
 {
+   // Safety check: ensure arrays have enough data
+   if(ArraySize(maFast) < 3 || ArraySize(maSlow) < 3 || ArraySize(rsi) < 2)
+   {
+      return 0; // Not enough data yet
+   }
+
    if(maFast[1] > maSlow[1] && maFast[2] <= maSlow[2] && rsi[1] < InpRSIOverbought)
       return 1;
 
