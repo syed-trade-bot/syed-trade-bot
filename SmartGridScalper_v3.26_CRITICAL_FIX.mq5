@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|       Smart Single-Direction Grid EA v3.25 (OPTIMIZED SCALPER)  |
+//|       Smart Single-Direction Grid EA v3.26 (OPTIMIZED SCALPER)  |
 //|               Optimized for M1, M5, M15 Timeframes               |
 //+------------------------------------------------------------------+
-#property copyright "Smart Grid Pro v3.25 – Optimized Scalper Edition"
-#property version   "3.25"
+#property copyright "Smart Grid Pro v3.26 – ATR Init Fix + Performance"
+#property version   "3.26"
 #property strict
-#property description "Single-direction ATR Grid + Basket Protection (M1-M15) - Performance Optimized"
+#property description "Single-direction ATR Grid + Basket Protection (M1-M15) - Critical ATR Fix"
 
 #include <Trade\Trade.mqh>
 CTrade trade;
@@ -66,6 +66,7 @@ int      atrHandle = INVALID_HANDLE;
 datetime lastBarTime = 0;
 datetime lastRecalc   = 0;
 ulong    lastProtectionCheck = 0;                           // NEW: Throttle protection logic
+bool     parametersInitialized = false;                     // NEW: Track initialization state
 
 // Performance cache
 struct PositionCache
@@ -118,14 +119,15 @@ int OnInit()
       tfName = EnumToString((ENUM_TIMEFRAMES)Period());
 
    Print("╔════════════════════════════════════════════════════════════╗");
-   Print("║  Smart Scalper v3.25 OPTIMIZED                            ║");
+   Print("║  Smart Scalper v3.26 - ATR Init Fix                      ║");
    Print("╠════════════════════════════════════════════════════════════╣");
    Print("║  Symbol: ",Sym,"  |  TF: ",tfName,"                        ║");
    Print("║  Direction: ",(TradingDirection==ORDER_TYPE_BUY?"BUY":"SELL"),"  |  Magic: ",MagicNumber,"                   ║");
    Print("║  Protection Interval: ",ProtectionCheckInterval,"ms                      ║");
+   Print("║  Status: Waiting for first tick to initialize ATR         ║");
    Print("╚════════════════════════════════════════════════════════════╝");
 
-   RecalculateParameters();
+   // NOTE: Parameters will be calculated on first tick when ATR buffer is ready
    InvalidateCache();
 
    EventSetTimer(60);
@@ -147,6 +149,34 @@ void OnDeinit(const int reason)
 void OnTick()
   {
    ulong tickTime = GetTickCount64();
+
+   // ═══════════════════════════════════════════════════════════════
+   // INITIALIZATION - First Tick Only (After ATR Buffer Ready)
+   // ═══════════════════════════════════════════════════════════════
+   if(!parametersInitialized)
+     {
+      // Wait for ATR indicator to calculate at least 2 bars
+      if(BarsCalculated(atrHandle) < 2)
+        {
+         if(EnablePerformanceLog)
+            Print("[INIT] Waiting for ATR buffer... bars calculated: ",BarsCalculated(atrHandle));
+         return;
+        }
+
+      RecalculateParameters();
+
+      if(CurrentATR > 0)  // Verify initialization succeeded
+        {
+         parametersInitialized = true;
+         lastRecalc = TimeCurrent();
+         Print("✓ Parameters initialized successfully on first tick");
+        }
+      else
+        {
+         Print("[WARN] ATR calculation failed, will retry on next tick");
+         return;
+        }
+     }
 
    // ═══════════════════════════════════════════════════════════════
    // CRITICAL SAFETY - Always Check
@@ -223,22 +253,66 @@ void RecalculateParameters()
   {
    ulong startTime = GetTickCount64();
 
+   // ═══════════════════════════════════════════════════════════════
+   // ATR BUFFER VALIDATION - Critical for Accurate Grid Calculation
+   // ═══════════════════════════════════════════════════════════════
    double atr[];
    ArraySetAsSeries(atr,true);
 
-   if(CopyBuffer(atrHandle,0,0,1,atr)<=0)
+   // Verify indicator is ready
+   int calculated = BarsCalculated(atrHandle);
+   if(calculated < 2)
      {
-      Print("[ERROR] Failed to copy ATR buffer");
+      Print("[ERROR] ATR indicator not ready yet (bars calculated: ",calculated,")");
       return;
      }
 
-   double newATR = atr[0];
-
-   // Validate ATR
-   if(newATR <= 0 || newATR > 1000.0 * PipSize)
+   // Copy ATR buffer with validation
+   if(CopyBuffer(atrHandle,0,0,3,atr) < 3)  // Copy 3 bars for validation
      {
-      Print("[ERROR] Invalid ATR value: ",newATR," - skipping recalculation");
+      Print("[ERROR] Failed to copy ATR buffer - insufficient data");
       return;
+     }
+
+   double newATR = atr[0];    // Most recent ATR
+   double atr1 = atr[1];      // Previous ATR
+   double atr2 = atr[2];      // 2 bars ago
+
+   // ═══════════════════════════════════════════════════════════════
+   // MULTI-LEVEL ATR VALIDATION
+   // ═══════════════════════════════════════════════════════════════
+
+   // 1. Basic sanity check
+   if(newATR <= 0)
+     {
+      Print("[ERROR] ATR is zero or negative: ",newATR);
+      return;
+     }
+
+   // 2. Maximum reasonable value (prevent runaway calculations)
+   if(newATR > 1000.0 * PipSize)
+     {
+      Print("[ERROR] ATR too large (possibly invalid): ",DoubleToString(newATR/PipSize,1)," pips");
+      return;
+     }
+
+   // 3. Spike detection - ATR shouldn't change >300% between bars
+   if(atr1 > 0 && MathAbs(newATR - atr1) / atr1 > 3.0)
+     {
+      Print("[WARN] ATR spike detected! Current: ",DoubleToString(newATR/PipSize,1),
+            " pips | Previous: ",DoubleToString(atr1/PipSize,1)," pips - using average");
+
+      // Use average of last 3 ATR values to smooth spike
+      newATR = (newATR + atr1 + atr2) / 3.0;
+     }
+
+   // 4. Minimum ATR threshold (prevent too-tight grids)
+   double minATR = 0.5 * PipSize;  // Minimum 0.5 pips
+   if(newATR < minATR)
+     {
+      Print("[WARN] ATR too small (",DoubleToString(newATR/PipSize,2)," pips) - using minimum ",
+            DoubleToString(minATR/PipSize,1)," pips");
+      newATR = minATR;
      }
 
    CurrentATR = newATR;
